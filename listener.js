@@ -27,7 +27,23 @@ mqttClient.on("connect", () => {
 
 // PostgreSQL
 const pgClient = new Client({ connectionString: process.env.PG_URL });
-pgClient.connect().then(() => console.log("Conectado ao PostgreSQL"));
+//pgClient.connect().then(() => console.log("Conectado ao PostgreSQL"));
+
+async function conectarPostgres(retentativas = 5) {
+  for (let i = 0; i < retentativas; i++) {
+    try {
+      await pgClient.connect();
+      console.log("Conectado ao PostgreSQL");
+      return;
+    } catch (err) {
+      console.error(`Erro ao conectar, tentativa ${i + 1}/${retentativas}:`, err.message);
+      await new Promise((r) => setTimeout(r, 3000)); // aguarda 3s
+    }
+  }
+  process.exit(1); // encerra se falhar
+}
+
+conectarPostgres();
 
 mqttClient.on("message", async (topic, message) => {
   try {
