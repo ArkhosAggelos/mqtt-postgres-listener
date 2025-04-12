@@ -2,6 +2,7 @@
   "name": "mqtt-postgres-listener",
   "version": "1.0.0",
   "description": "Listener MQTT que recebe dados do ESP8266 e salva no PostgreSQL via Railway",
+  "type": "module",
   "main": "listener.js",
   "scripts": {
     "start": "node listener.js"
