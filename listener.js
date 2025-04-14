@@ -1,4 +1,3 @@
-// listener.js
 import dotenv from "dotenv";
 import mqtt from "mqtt";
 import pkg from "pg";
@@ -6,30 +5,47 @@ const { Client } = pkg;
 
 dotenv.config();
 
-// MQTT
-const mqttOptions = {
+// Configurações MQTT
+const mqttClient = mqtt.connect({
   host: process.env.MQTT_BROKER,
   port: parseInt(process.env.MQTT_PORT),
   username: process.env.MQTT_USERNAME,
   password: process.env.MQTT_PASSWORD,
   protocol: "mqtts"
-};
-
-const mqttClient = mqtt.connect(mqttOptions);
-
-// PostgreSQL
-const pgClient = new Client({ connectionString: process.env.PG_URL });
-await pgClient.connect();
-
-mqttClient.on("connect", () => {
-  console.log("Conectado ao MQTT");
-  mqttClient.subscribe("estacao/externo");
 });
 
+// Configurações PostgreSQL
+const pgClient = new Client({ connectionString: process.env.PG_URL });
+
+async function conectarPostgres(retries = 5) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await pgClient.connect();
+      console.log("Conectado ao PostgreSQL");
+      return;
+    } catch (err) {
+      console.error(`Tentativa ${i + 1} falhou:`, err.message);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  process.exit(1);
+}
+
+conectarPostgres();
+
+// MQTT conectado
+mqttClient.on("connect", () => {
+  console.log("MQTT conectado");
+  mqttClient.subscribe(process.env.MQTT_TOPIC, (err) => {
+    if (!err) console.log(`Inscrito no tópico ${process.env.MQTT_TOPIC}`);
+  });
+});
+
+// Quando chega uma mensagem
 mqttClient.on("message", async (topic, message) => {
   try {
     const payload = JSON.parse(message.toString());
-    console.log("Mensagem recebida:", payload);
+    console.log("Recebido:", payload);
 
     const query = `INSERT INTO leituras (id, temperatura, umidade, pressao, lux, previsao)
                    VALUES ($1, $2, $3, $4, $5, $6)`;
@@ -43,7 +59,7 @@ mqttClient.on("message", async (topic, message) => {
       payload.previsao
     ]);
 
-    console.log("Dados inseridos com sucesso.");
+    console.log("✅ Inserido com sucesso");
   } catch (err) {
     console.error("Erro ao inserir:", err.message);
   }
