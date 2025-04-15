@@ -1,76 +1,73 @@
-import dotenv from "dotenv";
-import pkg from "pg";
-import { DateTime } from "luxon";
-
-dotenv.config();
+// Importa bibliotecas necessárias
+import dotenv from "dotenv"; // Gerencia variáveis de ambiente (.env)
+import pkg from "pg";        // Biblioteca para conectar com o PostgreSQL
 
 const { Client } = pkg;
-const client = new Client({ connectionString: process.env.PG_URL });
+dotenv.config(); // Carrega as variáveis de ambiente do arquivo .env
 
-async function main() {
-  try {
-    await client.connect();
-    console.log("📡 Conectado ao PostgreSQL");
+// Conecta ao banco de dados PostgreSQL
+const client = new Client({
+  connectionString: process.env.PG_URL,
+});
 
-    // Busca as horas únicas já agregadas
-    const resAgregadas = await client.query("SELECT id FROM leituras_hora");
-    const idsAgregados = new Set(resAgregadas.rows.map(r => r.id));
+await client.connect();
+console.log("✅ Conectado ao PostgreSQL");
 
-    // Hora atual no formato 'YYYYMMDDHH'
-    const horaAtual = DateTime.now().toFormat("yyyyLLddHH");
+// Consulta para obter as horas únicas presentes na tabela principal
+const resultadoHoras = await client.query(`
+  SELECT DISTINCT SUBSTRING(id, 1, 10) AS hora
+  FROM leituras
+  ORDER BY hora
+`);
 
-    // Busca todas as horas com dados e que ainda não foram agregadas
-    const resHoras = await client.query(`
-      SELECT DISTINCT SUBSTRING(id FROM 1 FOR 10) as hora
-      FROM leituras
-      ORDER BY hora
-    `);
+for (const linha of resultadoHoras.rows) {
+  const hora = linha.hora;
 
-    for (const row of resHoras.rows) {
-      const hora = row.hora;
-      if (hora >= horaAtual) continue; // pula hora atual ou futura
-      if (idsAgregados.has(hora)) {
-        console.log(`⏩ Hora ${hora} já agregada. Pulando.`);
-        continue;
-      }
-
-      // Faz agregação dessa hora
-      const dados = await client.query(`
-        SELECT
-          MIN(temperatura) AS temp_min,
-          MAX(temperatura) AS temp_max,
-          AVG(temperatura) AS temp_media,
-          MIN(umidade) AS umidade_min,
-          MAX(umidade) AS umidade_max,
-          AVG(umidade) AS umidade_media,
-          MIN(pressao) AS pressao_min,
-          MAX(pressao) AS pressao_max,
-          AVG(pressao) AS pressao_media,
-          MIN(lux) AS lux_min,
-          MAX(lux) AS lux_max,
-          AVG(lux) AS lux_media
-        FROM leituras
-        WHERE SUBSTRING(id FROM 1 FOR 10) = $1
-      `, [hora]);
-
-      await client.query(`
-        INSERT INTO leituras_hora (
-          id, temp_min, temp_max, temp_media,
-          umidade_min, umidade_max, umidade_media,
-          pressao_min, pressao_max, pressao_media,
-          lux_min, lux_max, lux_media
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-      `, [hora, ...Object.values(dados.rows[0])]);
-
-      console.log(`✔ Dados agregados com sucesso para a hora ${hora}`);
-    }
-
-    console.log("🏁 Agregação horária concluída.");
-  } catch (err) {
-    console.error("Erro ao executar agregação por hora:", err.message);
-  } finally {
-    await client.end();
+  // Verifica se essa hora já foi agregada
+  const jaExiste = await client.query(`SELECT 1 FROM leituras_hora WHERE id = $1`, [hora]);
+  if (jaExiste.rowCount > 0) {
+    console.log(`⏩ Hora ${hora} já agregada. Pulando.`);
+    continue;
   }
+
+  // Realiza os cálculos de agregação para temperatura, umidade, pressão e luminosidade
+  const resultado = await client.query(
+    `
+    SELECT
+      MIN(temperatura) AS temp_min,
+      MAX(temperatura) AS temp_max,
+      AVG(temperatura) AS temp_media,
+      MIN(umidade) AS umidade_min,
+      MAX(umidade) AS umidade_max,
+      AVG(umidade) AS umidade_media,
+      MIN(pressao) AS pressao_min,
+      MAX(pressao) AS pressao_max,
+      AVG(pressao) AS pressao_media,
+      MIN(lux) AS lux_min,
+      MAX(lux) AS lux_max,
+      AVG(lux) AS lux_media
+    FROM leituras
+    WHERE SUBSTRING(id, 1, 10) = $1
+  `,
+    [hora]
+  );
+
+  // Insere os dados agregados na tabela de agregações por hora
+  const r = resultado.rows[0];
+  await client.query(
+    `
+    INSERT INTO leituras_hora (
+      id, temp_min, temp_max, temp_media,
+      umidade_min, umidade_max, umidade_media,
+      pressao_min, pressao_max, pressao_media,
+      lux_min, lux_max, lux_media
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+  `,
+    [hora, r.temp_min, r.temp_max, r.temp_media, r.umidade_min, r.umidade_max, r.umidade_media, r.pressao_min, r.pressao_max, r.pressao_media, r.lux_min, r.lux_max, r.lux_media]
+  );
+
+  console.log(`✔ Dados agregados com sucesso para a hora ${hora}`);
 }
 
-main();
+console.log("🏁 Agregação horária concluída.");
+await client.end(); // Encerra a conexão com o banco
