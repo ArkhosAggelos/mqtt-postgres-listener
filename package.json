@@ -1,14 +1,14 @@
 {
   "name": "mqtt-postgres-listener",
   "version": "1.0.0",
-  "description": "Listener MQTT que armazena e agrega dados no PostgreSQL",
+  "description": "Listener MQTT e agregador por hora",
   "main": "listener.js",
   "type": "module",
   "scripts": {
-    "start": "node listener.js",
-    "agregar_hora": "node agregador_hora.js"
+    "start": "concurrently \"node listener.js\" \"node agregador_hora.js\""
   },
   "dependencies": {
+    "concurrently": "^8.2.0",
     "dotenv": "^16.3.1",
     "mqtt": "^5.0.0",
     "pg": "^8.11.1"
