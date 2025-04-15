@@ -1,16 +1,18 @@
 {
-  "name": "mqtt-postgres-listener",
+  "name": "estacao-meteorologica",
   "version": "1.0.0",
-  "description": "Listener MQTT e agregador por hora",
+  "description": "Projeto da estação meteorológica com agregações horárias e diárias",
   "main": "listener.js",
   "type": "module",
   "scripts": {
-    "start": "concurrently \"node listener.js\" \"node agregador_hora.js\""
+    "start": "concurrently \"node listener.js\" \"node agregador_hora.js\" \"node agregador_dia.js\"",
+    "agregar_hora": "node agregador_hora.js",
+    "agregar_dia": "node agregador_dia.js"
   },
   "dependencies": {
-    "concurrently": "^8.2.0",
     "dotenv": "^16.3.1",
     "mqtt": "^5.0.0",
-    "pg": "^8.11.1"
+    "pg": "^8.11.1",
+    "concurrently": "^8.2.0"
   }
 }
