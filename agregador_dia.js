@@ -1,73 +1,92 @@
+// agregador_dia.js
+
 import dotenv from "dotenv";
 import pkg from "pg";
 const { Client } = pkg;
 
 dotenv.config();
 
-const cliente = new Client({
-  connectionString: process.env.PG_URL,
-});
+// Conexão com PostgreSQL usando variável de ambiente PG_URL
+const pgClient = new Client({ connectionString: process.env.PG_URL });
 
-await cliente.connect();
-console.log("Conectado ao PostgreSQL");
+// Função principal de execução
+async function executarAgregacaoDiaria() {
+  try {
+    await pgClient.connect();
+    console.log("Conectado ao PostgreSQL ✅");
 
-// Obtemos a data de ontem no formato YYYYMMDD
-const ontem = new Date();
-ontem.setDate(ontem.getDate() - 1);
-const yyyy = ontem.getFullYear();
-const mm = String(ontem.getMonth() + 1).padStart(2, "0");
-const dd = String(ontem.getDate()).padStart(2, "0");
-const idOntem = `${yyyy}${mm}${dd}`;
+    // Obtém todos os dias distintos (YYYYMMDD) existentes na tabela leituras_hora
+    const dias = await pgClient.query(`
+      SELECT DISTINCT SUBSTRING(id FROM 1 FOR 8) AS dia
+      FROM leituras_hora
+      ORDER BY dia
+    `);
 
-console.log(`Verificando agregação do dia ${idOntem}...`);
+    for (const row of dias.rows) {
+      const dia = row.dia;
 
-// Verificamos se o dia já foi agregado
-const { rows: existe } = await cliente.query(
-  "SELECT 1 FROM leituras_dia WHERE id = $1 LIMIT 1",
-  [idOntem]
-);
+      // Verifica se o dia já foi agregado
+      const existe = await pgClient.query(`
+        SELECT 1 FROM leitura_dia WHERE id = $1
+      `, [dia]);
 
-if (existe.length > 0) {
-  console.log(`Dia ${idOntem} já está agregado. Nada a fazer.`);
-  await cliente.end();
-  process.exit(0);
+      if (existe.rowCount > 0) {
+        console.log(`⏩ Dia ${dia} já agregado. Pulando.`);
+        continue;
+      }
+
+      // Realiza a agregação por dia
+      const resultado = await pgClient.query(`
+        SELECT
+          MIN(temp_min) AS temp_min,
+          MAX(temp_max) AS temp_max,
+          AVG(temp_media) AS temp_media,
+
+          MIN(umidade_min) AS umidade_min,
+          MAX(umidade_max) AS umidade_max,
+          AVG(umidade_media) AS umidade_media,
+
+          MIN(pressao_min) AS pressao_min,
+          MAX(pressao_max) AS pressao_max,
+          AVG(pressao_media) AS pressao_media,
+
+          MIN(lux_min) AS lux_min,
+          MAX(lux_max) AS lux_max,
+          AVG(lux_media) AS lux_media
+        FROM leituras_hora
+        WHERE SUBSTRING(id FROM 1 FOR 8) = $1
+      `, [dia]);
+
+      const r = resultado.rows[0];
+
+      // Insere o resultado na tabela leitura_dia
+      await pgClient.query(`
+        INSERT INTO leitura_dia (
+          id,
+          temp_min, temp_max, temp_media,
+          umidade_min, umidade_max, umidade_media,
+          pressao_min, pressao_max, pressao_media,
+          lux_min, lux_max, lux_media
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      `, [
+        dia,
+        r.temp_min, r.temp_max, r.temp_media,
+        r.umidade_min, r.umidade_max, r.umidade_media,
+        r.pressao_min, r.pressao_max, r.pressao_media,
+        r.lux_min, r.lux_max, r.lux_media
+      ]);
+
+      console.log(`✅ Dia ${dia} agregado com sucesso!`);
+    }
+
+    console.log("🏁 Agregação diária concluída.");
+    await pgClient.end();
+
+  } catch (err) {
+    console.error("❌ Erro na agregação diária:", err.message);
+    process.exit(1);
+  }
 }
 
-// Agrega os dados do dia anterior a partir da tabela leituras_hora
-const resultado = await cliente.query(
-  `
-  SELECT
-    MIN(temp_min) AS temp_min, MAX(temp_max) AS temp_max, AVG(temp_media) AS temp_media,
-    MIN(umidade_min) AS umidade_min, MAX(umidade_max) AS umidade_max, AVG(umidade_media) AS umidade_media,
-    MIN(pressao_min) AS pressao_min, MAX(pressao_max) AS pressao_max, AVG(pressao_media) AS pressao_media,
-    MIN(lux_min) AS lux_min, MAX(lux_max) AS lux_max, AVG(lux_media) AS lux_media
-  FROM leituras_hora
-  WHERE id LIKE $1
-`,
-  [`${idOntem}%`]
-);
-
-const dados = resultado.rows[0];
-
-// Inserimos os dados agregados na tabela leituras_dia
-await cliente.query(
-  `
-  INSERT INTO leituras_dia (
-    id,
-    temp_min, temp_max, temp_media,
-    umidade_min, umidade_max, umidade_media,
-    pressao_min, pressao_max, pressao_media,
-    lux_min, lux_max, lux_media
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-`,
-  [
-    idOntem,
-    dados.temp_min, dados.temp_max, dados.temp_media,
-    dados.umidade_min, dados.umidade_max, dados.umidade_media,
-    dados.pressao_min, dados.pressao_max, dados.pressao_media,
-    dados.lux_min, dados.lux_max, dados.lux_media
-  ]
-);
-
-console.log(`✅ Agregação do dia ${idOntem} concluída.`);
-await cliente.end();
+// Inicia o processo
+executarAgregacaoDiaria();
