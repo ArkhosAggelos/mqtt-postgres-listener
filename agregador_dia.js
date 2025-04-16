@@ -2,70 +2,73 @@
 import dotenv from "dotenv";
 import pkg from "pg";
 const { Client } = pkg;
-import { DateTime } from "luxon";
 
 dotenv.config();
 
-// Conexão com o banco de dados
+// Conexão com o PostgreSQL
 const client = new Client({ connectionString: process.env.PG_URL });
 await client.connect();
-console.log("Conectado ao PostgreSQL");
+console.log("📡 Conectado ao PostgreSQL");
 
-// Obtém data atual em Brasília (UTC-3)
-const agora = DateTime.now().setZone("America/Sao_Paulo");
+// Hora local atual (ajustada para UTC-3, horário de Brasília)
+const agora = new Date();
+agora.setUTCHours(agora.getUTCHours() + -3);
 
-// Somente após 00h01 é permitido agregar o dia anterior
-if (agora.hour < 0) {
-  console.log("⏳ Ainda não é meia-noite, agregação do dia anterior não permitida.");
+// Somente executa a agregação diária após 23h59
+if (agora.getHours() < 23) {
+  console.log("⏳ Ainda não são 23h. Agregação diária será ignorada.");
   process.exit(0);
 }
 
-// Define qual dia vamos agregar (ontem)
-const dia = agora.minus({ days: 1 }).toFormat("yyyyLLdd");
-console.log("📅 Agregando dados do dia:", dia);
+// Formata a data atual como string YYYYMMDD
+const dataAtual = agora.toISOString().slice(0, 10).replace(/-/g, '');
+const dataLimite = dataAtual;
 
-// Verifica se esse dia já foi agregado
-const checar = await client.query("SELECT 1 FROM leitura_dia WHERE id = $1", [dia]);
-if (checar.rowCount > 0) {
-  console.log("⏩ Dia", dia, "já foi agregado. Pulando.");
-  process.exit(0);
-}
-
-// Agrega com base no ID do dia
-const consulta = await client.query(`
-  SELECT
-    MIN(temperatura) AS temp_min,
-    MAX(temperatura) AS temp_max,
-    AVG(temperatura) AS temp_media,
-    MIN(umidade) AS umidade_min,
-    MAX(umidade) AS umidade_max,
-    AVG(umidade) AS umidade_media,
-    MIN(pressao) AS pressao_min,
-    MAX(pressao) AS pressao_max,
-    AVG(pressao) AS pressao_media,
-    MIN(lux) AS lux_min,
-    MAX(lux) AS lux_max,
-    AVG(lux) AS lux_media
+// Busca os dias únicos nas leituras anteriores à data atual
+const resultado = await client.query(`
+  SELECT DISTINCT LEFT(id, 8) AS dia
   FROM leituras
-  WHERE id LIKE '${dia}%'
-`);
+  WHERE LEFT(id, 8) < $1
+  ORDER BY dia;
+`, [dataLimite]);
 
-const dados = consulta.rows[0];
+for (const row of resultado.rows) {
+  const dia = row.dia;
 
-if (!dados.temp_min) {
-  console.log("⚠️ Nenhum dado encontrado para o dia", dia);
-  process.exit(0);
+  // Verifica se já existe agregação
+  const jaExiste = await client.query(`SELECT 1 FROM leitura_dia WHERE id = $1`, [dia]);
+  if (jaExiste.rowCount > 0) {
+    console.log(`⏩ Dia ${dia} já agregado. Pulando.`);
+    continue;
+  }
+
+  // Executa a agregação do dia
+  const agregados = await client.query(`
+    SELECT
+      MIN(temperatura) AS temp_min,
+      MAX(temperatura) AS temp_max,
+      AVG(temperatura) AS temp_media,
+      MIN(umidade) AS umidade_min,
+      MAX(umidade) AS umidade_max,
+      AVG(umidade) AS umidade_media,
+      MIN(pressao) AS pressao_min,
+      MAX(pressao) AS pressao_max,
+      AVG(pressao) AS pressao_media,
+      MIN(lux) AS lux_min,
+      MAX(lux) AS lux_max,
+      AVG(lux) AS lux_media
+    FROM leituras
+    WHERE LEFT(id, 8) = $1
+  `, [dia]);
+
+  const dados = agregados.rows[0];
+  await client.query(`
+    INSERT INTO leitura_dia (id, temp_min, temp_max, temp_media, umidade_min, umidade_max, umidade_media, pressao_min, pressao_max, pressao_media, lux_min, lux_max, lux_media)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+  `, [dia, ...Object.values(dados)]);
+
+  console.log(`✔ Agregado com sucesso para o dia ${dia}`);
 }
 
-// Insere dados agregados na tabela leitura_dia
-await client.query(`
-  INSERT INTO leitura_dia (
-    id, temp_min, temp_max, temp_media,
-    umidade_min, umidade_max, umidade_media,
-    pressao_min, pressao_max, pressao_media,
-    lux_min, lux_max, lux_media
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-`, [dia, ...Object.values(dados)]);
-
-console.log("✅ Dados agregados com sucesso para o dia", dia);
-process.exit(0);
+await client.end();
+console.log("🏁 Agregação diária finalizada.");
