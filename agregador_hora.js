@@ -2,67 +2,74 @@
 import dotenv from "dotenv";
 import pkg from "pg";
 const { Client } = pkg;
-import { DateTime } from "luxon";
 
 dotenv.config();
 
-// Conexão com o banco de dados
+// Conecta ao banco PostgreSQL
 const client = new Client({ connectionString: process.env.PG_URL });
 await client.connect();
-console.log("Conectado ao PostgreSQL");
+console.log("📡 Conectado ao PostgreSQL");
 
-// Obtém data e hora local de Brasília (UTC-3)
-const agora = DateTime.now().setZone("America/Sao_Paulo");
-
-// Remove minutos e segundos e volta uma hora para pegar a hora encerrada
-const horaParaAgregacao = agora.minus({ hours: 1 }).startOf("hour");
-const id = horaParaAgregacao.toFormat("yyyyLLddHH"); // Ex: 2025041518
-
-console.log("⏱️ Agregando hora encerrada:", id);
-
-// Verifica se a hora já foi agregada anteriormente
-const checar = await client.query("SELECT 1 FROM leituras_hora WHERE id = $1", [id]);
-if (checar.rowCount > 0) {
-  console.log("⏩ Hora", id, "já agregada. Pulando.");
-  process.exit(0);
+// Função para obter a hora atual no formato YYYYMMDDHH
+function horaAtualFormatada() {
+  const agora = new Date();
+  agora.setUTCHours(agora.getUTCHours() + -3); // Ajusta para horário de Brasília (UTC-3)
+  const ano = agora.getFullYear();
+  const mes = String(agora.getMonth() + 1).padStart(2, "0");
+  const dia = String(agora.getDate()).padStart(2, "0");
+  const hora = String(agora.getHours()).padStart(2, "0");
+  return `${ano}${mes}${dia}${hora}`;
 }
 
-// Realiza a agregação dos dados da hora encerrada
-const consulta = await client.query(`
-  SELECT
-    MIN(temperatura) AS temp_min,
-    MAX(temperatura) AS temp_max,
-    AVG(temperatura) AS temp_media,
-    MIN(umidade) AS umidade_min,
-    MAX(umidade) AS umidade_max,
-    AVG(umidade) AS umidade_media,
-    MIN(pressao) AS pressao_min,
-    MAX(pressao) AS pressao_max,
-    AVG(pressao) AS pressao_media,
-    MIN(lux) AS lux_min,
-    MAX(lux) AS lux_max,
-    AVG(lux) AS lux_media
+// Obtem hora anterior para agregar (a última hora COMPLETA)
+const horaLimite = horaAtualFormatada();
+console.log(`🕒 Agregando até a hora anterior a ${horaLimite}`);
+
+// Busca as horas únicas da tabela leituras
+const resultado = await client.query(`
+  SELECT DISTINCT LEFT(id, 10) AS hora
   FROM leituras
-  WHERE id LIKE '${id}%'
-`);
+  WHERE LEFT(id, 10) < $1
+  ORDER BY hora;
+`, [horaLimite]);
 
-const dados = consulta.rows[0];
+for (const row of resultado.rows) {
+  const hora = row.hora;
 
-// Se não houver dados para o período, pula
-if (!dados.temp_min) {
-  console.log("⚠️ Nenhum dado encontrado para a hora", id);
-  process.exit(0);
+  // Verifica se já foi agregado
+  const jaExiste = await client.query(`SELECT 1 FROM leituras_hora WHERE id = $1`, [hora]);
+  if (jaExiste.rowCount > 0) {
+    console.log(`⏩ Hora ${hora} já agregada. Pulando.`);
+    continue;
+  }
+
+  // Executa a agregação para essa hora
+  const agregados = await client.query(`
+    SELECT
+      MIN(temperatura) AS temp_min,
+      MAX(temperatura) AS temp_max,
+      AVG(temperatura) AS temp_media,
+      MIN(umidade) AS umidade_min,
+      MAX(umidade) AS umidade_max,
+      AVG(umidade) AS umidade_media,
+      MIN(pressao) AS pressao_min,
+      MAX(pressao) AS pressao_max,
+      AVG(pressao) AS pressao_media,
+      MIN(lux) AS lux_min,
+      MAX(lux) AS lux_max,
+      AVG(lux) AS lux_media
+    FROM leituras
+    WHERE LEFT(id, 10) = $1
+  `, [hora]);
+
+  const dados = agregados.rows[0];
+  await client.query(`
+    INSERT INTO leituras_hora (id, temp_min, temp_max, temp_media, umidade_min, umidade_max, umidade_media, pressao_min, pressao_max, pressao_media, lux_min, lux_max, lux_media)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+  `, [hora, ...Object.values(dados)]);
+
+  console.log(`✔ Agregado com sucesso para hora ${hora}`);
 }
 
-// Insere os dados agregados na tabela leituras_hora
-await client.query(`
-  INSERT INTO leituras_hora (
-    id, temp_min, temp_max, temp_media,
-    umidade_min, umidade_max, umidade_media,
-    pressao_min, pressao_max, pressao_media,
-    lux_min, lux_max, lux_media
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-`, [id, ...Object.values(dados)]);
-
-console.log("✅ Dados agregados com sucesso para a hora", id);
-process.exit(0);
+await client.end();
+console.log("🏁 Agregação horária finalizada.");
