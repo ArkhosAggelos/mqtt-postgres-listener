@@ -5,6 +5,8 @@ const { Client } = pkg;
 
 dotenv.config();
 
+console.log("🟡 Iniciando agregador_dia.js");
+
 // Conexão com o PostgreSQL
 const client = new Client({ connectionString: process.env.PG_URL });
 await client.connect();
